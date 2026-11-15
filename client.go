@@ -89,10 +89,20 @@ func idPath(id string) (string, error) {
 }
 
 func (c *Client) request(ctx context.Context, method, path string, query url.Values, body any, key string) ([]byte, error) {
+	method = strings.ToUpper(method)
+	switch method {
+	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+	default:
+		return nil, errors.New("provide a supported HTTP method")
+	}
 	if !strings.HasPrefix(path, "/v1/") || strings.ContainsAny(path, "?#\\") {
 		return nil, errors.New("use a /v1/ path and pass query parameters separately")
 	}
-	for _, part := range strings.Split(path, "/") {
+	decodedPath, decodeErr := url.PathUnescape(path)
+	if decodeErr != nil {
+		return nil, errors.New("API path contains an invalid escape")
+	}
+	for _, part := range strings.Split(decodedPath, "/") {
 		if part == "." || part == ".." {
 			return nil, errors.New("API paths cannot contain traversal segments")
 		}

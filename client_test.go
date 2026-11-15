@@ -90,6 +90,12 @@ func TestValidationAndBoundedPolling(t *testing.T) {
 	if _, err := c.Do(context.Background(), "GET", "/v1/../secret", nil, nil, ""); err == nil {
 		t.Fatal("accepted traversal")
 	}
+	if _, err := c.Do(context.Background(), "post", "/v1/jobs", nil, Object{}, ""); err == nil {
+		t.Fatal("lowercase method bypassed replay validation")
+	}
+	if _, err := c.Do(context.Background(), "GET", "/v1/%2e%2e/secret", nil, nil, ""); err == nil {
+		t.Fatal("encoded traversal accepted")
+	}
 	if calls != 0 {
 		t.Fatal("validation made a request")
 	}
@@ -101,5 +107,26 @@ func TestValidationAndBoundedPolling(t *testing.T) {
 	last, err := c.WaitForJob(ctx, "fixture", time.Second)
 	if !errors.Is(err, context.DeadlineExceeded) || last["id"] != "fixture" {
 		t.Fatalf("lost recovery state: %v %v", last, err)
+	}
+}
+
+func TestBudgetConflictAndInaccessibleJobErrors(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		code   string
+	}{{402, "BUDGET_EXCEEDED"}, {409, "IDEMPOTENCY_CONFLICT"}, {404, "NOT_FOUND"}} {
+		calls := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.WriteHeader(tc.status)
+			_ = json.NewEncoder(w).Encode(Object{"error": Object{"code": tc.code, "message": "Fixture rejection", "retryable": false}})
+		}))
+		c, _ := NewWithBaseURL("fixture-key", srv.URL)
+		_, err := c.GetJob(context.Background(), "fixture")
+		var api *APIError
+		if !errors.As(err, &api) || api.Status != tc.status || api.Code != tc.code || api.Retryable || calls != 1 {
+			t.Fatalf("rejection or retry changed: %v %d", err, calls)
+		}
+		srv.Close()
 	}
 }
