@@ -2,7 +2,15 @@ name: Check Go client
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing release tag to index in the public Go proxy
+        required: true
+        default: v0.1.0
+        type: string
 permissions:
   contents: read
 jobs:
@@ -19,3 +27,18 @@ jobs:
           cache: false
       - run: go test ./...
       - run: go vet ./...
+  index-release:
+    needs: check
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Verify the release through the public Go proxy
+        env:
+          RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+          GOPROXY: https://proxy.golang.org
+          GOSUMDB: sum.golang.org
+        run: go list -m -json "github.com/TranscriptDock/transcriptdock-go@$RELEASE_VERSION"
