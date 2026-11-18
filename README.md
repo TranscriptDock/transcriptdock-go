@@ -60,7 +60,8 @@ jobs are returned normally; inspect status before reading `result_id`.
 `Do(ctx, method, path, query, body, idempotencyKey)` covers the complete public
 API, including batches, video/language discovery, upload slots, usage and
 webhook endpoints. Pass `nil` for absent query/body values and an empty string
-for requests without an idempotency key. For example:
+for requests without an idempotency key. A success with no body (204 No Content,
+such as deleting a webhook endpoint) returns an empty `Object`. For example:
 
 ```go
 jobs, err := client.Do(ctx, "GET", "/v1/jobs", url.Values{"limit": {"10"}}, nil, "")

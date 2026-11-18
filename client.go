@@ -88,35 +88,35 @@ func idPath(id string) (string, error) {
 	return url.PathEscape(id), nil
 }
 
-func (c *Client) request(ctx context.Context, method, path string, query url.Values, body any, key string) ([]byte, error) {
+func (c *Client) request(ctx context.Context, method, path string, query url.Values, body any, key string) ([]byte, int, error) {
 	method = strings.ToUpper(method)
 	switch method {
 	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
 	default:
-		return nil, errors.New("provide a supported HTTP method")
+		return nil, 0, errors.New("provide a supported HTTP method")
 	}
 	if !strings.HasPrefix(path, "/v1/") || strings.ContainsAny(path, "?#\\") {
-		return nil, errors.New("use a /v1/ path and pass query parameters separately")
+		return nil, 0, errors.New("use a /v1/ path and pass query parameters separately")
 	}
 	decodedPath, decodeErr := url.PathUnescape(path)
 	if decodeErr != nil {
-		return nil, errors.New("API path contains an invalid escape")
+		return nil, 0, errors.New("API path contains an invalid escape")
 	}
 	for _, part := range strings.Split(decodedPath, "/") {
 		if part == "." || part == ".." {
-			return nil, errors.New("API paths cannot contain traversal segments")
+			return nil, 0, errors.New("API paths cannot contain traversal segments")
 		}
 	}
 	needsKey := method == http.MethodPost && (path == "/v1/jobs" || path == "/v1/batches" || path == "/v1/video-discoveries" || path == "/v1/language-discoveries" || strings.HasSuffix(path, "/retry"))
 	if (needsKey || key != "") && !validKey(key) {
-		return nil, errors.New("provide an idempotency key with 8 to 128 printable ASCII characters")
+		return nil, 0, errors.New("provide an idempotency key with 8 to 128 printable ASCII characters")
 	}
 	var data []byte
 	var err error
 	if body != nil {
 		data, err = json.Marshal(body)
 		if err != nil {
-			return nil, errors.New("request body must be JSON serializable")
+			return nil, 0, errors.New("request body must be JSON serializable")
 		}
 	}
 	target := c.base + path
@@ -125,13 +125,13 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(data))
 	if err != nil {
-		return nil, errors.New("could not construct the API request")
+		return nil, 0, errors.New("could not construct the API request")
 	}
 	// Disable replay of submission bodies by the HTTP transport.
 	req.GetBody = nil
 	req.Header.Set("Authorization", "Bearer "+c.key)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "transcriptdock-go/0.1.0")
+	req.Header.Set("User-Agent", "transcriptdock-go/0.1.1")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -141,14 +141,14 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, 0, ctx.Err()
 		}
-		return nil, &APIError{Code: "NETWORK_ERROR", Message: "Could not reach the API. Check the job before retrying a submission.", Retryable: true}
+		return nil, 0, &APIError{Code: "NETWORK_ERROR", Message: "Could not reach the API. Check the job before retrying a submission.", Retryable: true}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, &APIError{Code: "NETWORK_ERROR", Message: "Could not read the API response.", Retryable: true}
+		return nil, 0, &APIError{Code: "NETWORK_ERROR", Message: "Could not read the API response.", Retryable: true}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var envelope struct {
@@ -173,16 +173,20 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 		}
 		e.Code = c.redact(e.Code)
 		e.Message = c.redact(e.Message)
-		return nil, e
+		return nil, 0, e
 	}
-	return raw, nil
+	return raw, resp.StatusCode, nil
 }
 
 // Do calls a public JSON endpoint with exact API field names. It preserves unknown response fields.
 func (c *Client) Do(ctx context.Context, method, path string, query url.Values, body any, idempotencyKey string) (Object, error) {
-	raw, err := c.request(ctx, method, path, query, body, idempotencyKey)
+	raw, status, err := c.request(ctx, method, path, query, body, idempotencyKey)
 	if err != nil {
 		return nil, err
+	}
+	if status == http.StatusNoContent {
+		// No Content: a success without a body, for example deleting a webhook endpoint.
+		return Object{}, nil
 	}
 	var out Object
 	if json.Unmarshal(raw, &out) != nil || out == nil {
@@ -228,7 +232,7 @@ func (c *Client) ExportTranscript(ctx context.Context, id, format string) (strin
 	if err != nil {
 		return "", err
 	}
-	raw, err := c.request(ctx, http.MethodGet, "/v1/transcripts/"+v+"/export", url.Values{"format": {format}}, nil, "")
+	raw, _, err := c.request(ctx, http.MethodGet, "/v1/transcripts/"+v+"/export", url.Values{"format": {format}}, nil, "")
 	return string(raw), err
 }
 

@@ -130,3 +130,24 @@ func TestBudgetConflictAndInaccessibleJobErrors(t *testing.T) {
 		srv.Close()
 	}
 }
+
+func TestNoContentSuccessReturnsEmptyObject(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/empty-ok" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c, _ := NewWithBaseURL("fixture-key", srv.URL)
+	out, err := c.Do(context.Background(), http.MethodDelete, "/v1/webhook-endpoints/fixture", nil, nil, "")
+	if err != nil || out == nil || len(out) != 0 {
+		t.Fatalf("no content success lost: %v %v", out, err)
+	}
+	_, err = c.Do(context.Background(), http.MethodGet, "/v1/empty-ok", nil, nil, "")
+	var api *APIError
+	if !errors.As(err, &api) || api.Code != "INVALID_RESPONSE" {
+		t.Fatalf("empty 200 accepted: %v", err)
+	}
+}
